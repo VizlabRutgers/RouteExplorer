@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+
+import argparse
+from collections import defaultdict
+import math
+import os
+import sys
+
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+def calc_distances(node, positions, dlinkbreak):
+    t_nsecs = positions.t_nsec.unique()
+
+    nodes = set(positions.node.unique())
+
+    if not node in nodes:
+        print('bad node id, quitting')
+        exit(1)
+
+    nodes.remove(node)
+    nodes = sorted(list(nodes))
+
+    positions.set_index(['t_nsec', 'node'], inplace=True)
+
+    ts = []
+    xs = []
+    ys = []
+    ds = defaultdict(lambda: [])
+
+    for t_nsec in t_nsecs:
+        t_sec = t_nsec / 1000000000
+
+        ts.append(t_sec)
+
+        p1 = positions.loc[(t_nsec, node)]
+        xs.append(p1.x)
+        ys.append(p1.y)
+
+        for node2 in nodes:
+            p2 = positions.loc[(t_nsec,node2)]
+            d = math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2)
+            ds[node2].append(d)
+
+    return ts,xs,ys,ds
+
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser(description='Plot node x and y coordinates and distances from other nodes')
+
+    parser.add_argument('--dlinkbreak',
+                        metavar='DLINKBREAK',
+                        default=139.0,
+                        type=float,
+                        help='The distance in meters that a link is considered to be broken')
+    parser.add_argument('insqlite',
+                        metavar='INSQLITE',
+                        help='The input sqlite file')
+    parser.add_argument('node',
+                        metavar='NODE',
+                        type=int,
+                        help='the node to plot')
+
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.insqlite):
+        print(f'Bad inputfile "{args.insqlite}", quitting', file=sys.stderr)
+        exit(1)
+
+    plt.style.use('ggplot')
+
+    con_in = sqlite3.connect(args.insqlite)
+
+    positions = pd.read_sql('select * from positions', con_in)
+
+    ts,xs,ys,ds = calc_distances(args.node, positions, args.dlinkbreak)
+
+    fig = plt.figure()
+
+    ax = fig.add_subplot(2,1,1)
+
+    plt.plot(ts, xs, marker='.', linestyle='none')
+
+    ax = fig.add_subplot(2,1,2)
+
+    plt.plot(ts, ys, marker='.', linestyle='none')
+
+    plt.savefig(f'node-{args.node}-xs-and.ys.png')
+
+    """
+    grid = sns.FacetGrid(distances_df,
+                         hue='broken',
+                         row='n1',
+                         col='n2',
+                         row_order=sorted(distances_df.n1.unique()),
+                         col_order=sorted(distances_df.n2.unique()))
+
+    grid.map(plt.plot, "t", "distance", marker='.', linestyle='none')
+
+    """

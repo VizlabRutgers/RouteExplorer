@@ -1,0 +1,18 @@
+@startuml
+[*] --> entry
+state Operating {
+state entry <<entryPoint>>
+entry --> Initial
+Initial --> Src : NodeClick
+Src --> SrcDst : AltNodeClick
+SrcDst --> Src : DstClick
+SrcDst --> Dst : SrcClick
+Dst --> SrcDst : NodeClick
+Src --> Initial : SrcClick
+Dst --> Initial : DstClick
+Src --> Src : NodeClick
+Dst --> Dst : AltNodeClick
+SrcDst --> SrcDst : NodeClick
+SrcDst --> SrcDst : AltNodeClick
+}
+@enduml

@@ -1,0 +1,24 @@
+@startuml
+
+[*] --> Unselected
+Unselected --> SrcNode : ClickNewNode
+Unselected --> DstNode : RightClickNewNode
+Unselected --> SrcAndDstNode : ClickNewCell
+SrcNode --> SrcNode : ClickNewNode
+SrcNode --> DstNode : RightClickSrcNod
+SrcNode --> SrcAndDstNode : RightClickNewNode
+SrcNode --> SrcAndDstNode : ClickNewCell
+SrcNode --> Unselected : ClickSrcNode
+SrcAndDstNode --> SrcNode : RightClickDstNode
+SrcAndDstNode --> DstNode : ClickSrcNode
+SrcAndDstNode --> SrcAndDstNode : ClickNewNode
+SrcAndDstNode --> SrcAndDstNode : RightClickNewNode
+SrcAndDstNode --> SrcAndDstNode : ClickNewCell
+SrcAndDstNode --> Unselected : ClickActiveCell
+DstNode --> DstNode : RightClickNewNode
+DstNode --> SrcNode : ClickDstNode
+DstNode --> SrcAndDstNode : ClickNewNode
+DstNode --> SrcAndDstNode : ClickNewCell
+DstNode --> Unselected : RightClickDstNode
+
+@enduml

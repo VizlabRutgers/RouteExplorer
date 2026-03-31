@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import sys
+
+from collections import defaultdict,namedtuple
+
+import sqlite3
+
+
+LogfileSet = namedtuple('LogfileSet', ['tx', 'rx', 'routes', 'positions', 'flows'])
+
+
+class RouteFileReader:
+    def __init__(self, routelog):
+        self._routelog = routelog
+
+        self._fd = open(self._routelog)
+        self._tpl = self._readline()
+
+    def _readline(self):
+        line = self._fd.readline().strip()
+
+        if line:
+            toks = line.split(',')
+
+            #100873390600  7 13 19,41,13 valid False
+            t_nsec,src_node,dst_node = tuple(map(int,toks[:3]))
+
+            route_str,category = toks[3:5]
+
+            # int of boolean will be 1 for True and 0 for False
+            active = int(toks[5].lower() == 'true')
+
+            return (t_nsec,src_node,dst_node,active,route_str,category)
+        else:
+            return (-1,)
+
+    def peek_t(self):
+        return self._tpl[0]
+
+    def peek(self):
+        return self._tpl
+
+    def next_entry(self):
+        tpl = self._tpl
+        self._tpl = self._readline()
+        return tpl
+
+
+def create_tables(con, tags):
+    print('create tables')
+
+    cursor = con.cursor()
+
+    # routes table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS routes (
+          t_nsec INTEGER NOT NULL,
+          tag text NOT NULL,
+          src_node INTEGER NOT NULL,
+          dst_node INTEGER NOT NULL,
+          active INTEGER NOT NULL,
+          route text NOT NULL,
+          category text NOT NULL,
+          hopcount INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, src_node, dst_node)
+        );"""
+    )
+
+    # flows table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS flows (
+          src_node INTEGER NOT NULL,
+          dst_node INTEGER NOT NULL,
+          t_nsec_start INTEGER NOT NULL,
+          t_nsec_stop INTEGER NOT NULL,
+          PRIMARY KEY(src_node, dst_node, t_nsec_start)
+        );"""
+    )
+
+    # packet tx table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tx (
+          t_nsec INTEGER NOT NULL,
+          tag text NOT NULL,
+          src_node INTEGER NOT NULL,
+          src_app INTEGER NOT NULL,
+          seq INTEGER NOT NULL,
+          size INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, src_node, src_app, seq)
+        );"""
+    )
+
+    # packet rx table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rx (
+          t_nsec INTEGER NOT NULL,
+          tag text NOT NULL,
+          src_node INTEGER NOT NULL,
+          src_app INTEGER NOT NULL,
+          dst_node INTEGER NOT NULL,
+          seq INTEGER NOT NULL,
+          size INTEGER NOT NULL,
+          delay INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, src_node, src_app, dst_node, seq)
+        );"""
+    )
+
+    # positions table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS positions (
+          t_nsec INTEGER NOT NULL,
+          node INTEGER NOT NULL,
+          x REAL NOT NULL,
+          y REAL NOT NULL,
+          z REAL NOT NULL,
+          vx REAL NOT NULL,
+          vy REAL NOT NULL,
+          vz REAL NOT NULL,
+          PRIMARY KEY(t_nsec, node)
+        );"""
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS timepoints (
+          t_id INTEGER NOT NULL,
+          t_nsec INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec)
+        );"""
+    )
+
+    # tags table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tags (
+          tag text NOT NULL,
+          PRIMARY KEY(tag)
+        );"""
+    )
+
+    for t in tags:
+        cursor.execute(
+            f'INSERT INTO tags (tag) VALUES ("{t}");'
+        )
+
+    con.commit()
+
+
+def timepoints_to_sqlite(con, timepoints):
+    print('aggregate timepoints')
+
+    ts = sorted(set(timepoints))
+
+    # timepoint ids start at 1
+    for t_id,t_nsec in enumerate(ts, start=1):
+        con.execute(
+            f'INSERT INTO timepoints (t_id, t_nsec) VALUES ({t_id}, {t_nsec});'
+        )
+
+    con.commit()
+
+
+def flows_to_sqlite(con, logfiles):
+    print('process flows')
+
+    flowfile = list(logfiles.values())[0].flows
+
+    # flows table
+    for line in open(flowfile):
+        toks = line.strip().split(',')
+        src_node,dst_node,t_nsec_start,t_nsec_stop = tuple(map(int, toks))
+
+        con.execute(
+            f'INSERT INTO flows (src_node, dst_node, t_nsec_start, t_nsec_stop) '
+            f'VALUES ({src_node}, {dst_node}, {t_nsec_start}, {t_nsec_stop});'
+        )
+
+    con.commit()
+
+    # tx and rx now
+    for tag,lfset in logfiles.items():
+        for line in open(lfset.tx):
+            # txfd.write(f'{t_nsec},{src_node_num},{src_app_num},{dst_node_num},{seq},{pktsize}\n')
+            toks = line.strip().split(',')
+
+            t = float(toks[0])
+
+            src_node,src_app,dst_node,seq,pktsize = list(map(int, toks[1:]))
+
+            #src_node INTEGER NOT NULL,
+            #src_app INTEGER NOT NULL,
+            #seq INTEGER NOT NULL,
+            #tag text NOT NULL,
+            #size INTEGER NOT NULL,
+            #t_nsec INTEGER NOT NULL,
+
+            con.execute(
+                f'INSERT INTO tx (src_node, src_app, seq, tag, size, t_nsec) ' \
+                f'VALUES ({src_node}, {src_app}, {seq}, "{tag}", {pktsize}, {t});'
+            )
+
+        for line in open(lfset.rx):
+            # rxfd.write(f'{t_nsec},{dst_node_num},{dst_app_num},{src_node},{src_app_num},{seq},{pktsize},{latency}')
+            toks = line.strip().split(',')
+
+            t = float(toks[0])
+
+            dst_node,dst_app,src_node,seq,src_app,pktsize,delay = list(map(int, toks[1:]))
+
+            #src_node INTEGER NOT NULL,
+            #src_app INTEGER NOT NULL,
+            #dst_node INTEGER NOT NULL,
+            #seq INTEGER NOT NULL,
+            #tag text NOT NULL,
+            #size INTEGER NOT NULL,
+            #t_nsec INTEGER NOT NULL,
+            #delay INTEGER NOT NULL
+
+            con.execute(
+                f'INSERT INTO rx (src_node, src_app, dst_node, seq, tag, size, t_nsec, delay) ' \
+                f'VALUES ({src_node}, {src_app}, {dst_node}, {seq}, "{tag}", {pktsize}, {t}, {delay});'
+            )
+
+        con.commit()
+
+
+def positions_to_sqlite(con, logfiles):
+    print('process positions')
+
+    # only open the first position file - related data sets are all assumed
+    # to be from the same scenario and hence the same mobility (you can diff
+    # the position.txt files to verify, no check done here
+    positionfile = list(logfiles.values())[0].positions
+
+    for line in open(positionfile):
+        #0.0000000  0 286.933205 1053.909864 0.000000 0.000000 0.000000 0.000000
+        #0.0000000  0 286.933205 1053.909864 0.000000 0.000000 0.000000 0.000000
+        toks = line.strip().split(',')
+
+        t_nsec = int(toks[0])
+
+        node = int(toks[1])
+
+        x,y,z,vx,vy,vz = list(map(float, toks[2:]))
+
+        #t_nsec INTEGER PRIMARY KEY,
+        #node INTEGER NOT NULL,
+        #timepoint REAL NOT NULL,
+        #x REAL NOT NULL,
+        #y REAL NOT NULL,
+        #z REAL NOT NULL,
+        #vx REAL NOT NULL,
+        #vy REAL NOT NULL,
+        #vz REAL NOT NULL
+
+        con.execute(
+            f'INSERT INTO positions (t_nsec, node, x, y, z, vx, vy, vz) ' \
+            f'VALUES ({t_nsec}, {node}, {x}, {y}, {z}, {vx}, {vy}, {vz});'
+        )
+
+    con.commit()
+
+
+def routes_to_sqlite(con, logfiles):
+    print('process routes')
+
+    # get and slrotall times
+    ts = set()
+
+    for p,lfset in logfiles.items():
+        rdr = RouteFileReader(lfset.routes)
+
+        t = rdr.next_entry()[0]
+        while t>=0:
+            ts.add(t)
+            t = rdr.next_entry()[0]
+
+    ts = sorted(ts)
+
+    route_state = defaultdict(lambda:{})
+    rdrs = {p:RouteFileReader(lfset.routes) for p,lfset in logfiles.items()}
+
+    for t in ts:
+        for p,rdr in rdrs.items():
+            if rdr.peek_t() == t:
+                # clear route state for tag about to be processed
+                route_state[p].clear()
+
+            while rdr.peek_t() == t:
+                entry = rdr.next_entry()
+                src_node,dst_node = entry[1:3]
+                if src_node == dst_node:
+                    # no self routes
+                    continue
+                route_state[p][(src_node,dst_node)] = entry
+
+        print(f'\rprocessing routes: {t}', end='')
+        write_route_state(con, t, route_state)
+
+    con.commit()
+    print()
+
+    return ts
+
+
+def write_route_state(con, t_nsec, route_state):
+    # need to have a line read from each file
+
+    # for timepoint_id and timepoint
+    #     for line in lines
+    #          while lines match for this tag
+    #               # if this route is valid, is it link broken?
+    # examples
+    # 164.4640070 42 45 45
+    # 164.4640070 43  0 0
+    # 164.4640070 43  1 11 incomplete
+    # 164.4640070 43 16 36,11,40,23,10,1,7,30,21,5,21 loop
+
+    """
+    CREATE TABLE IF NOT EXISTS routes (
+       t_nsec INTEGER NOT NULL,
+       tag text NOT NULL,
+       src_node INTEGER NOT NULL,
+       dst_node INTEGER NOT NULL,
+       active INTEGER NOT NULL,
+       route text NOT NULL,
+       category text NOT NULL,
+       hopcount INTEGER NOT NULL,
+       PRIMARY KEY(t_nsec, tag, src_node, dst_node)
+    );
+    """
+
+    for p,table in route_state.items():
+        #  return (t_nsec,src_node,dst_node,active,route_str,category)
+        for (_,_),(_,src_node,dst_node,active,route_str,category) in sorted(table.items()):
+            hopcount = len(route_str.split('-'))
+            con.execute(
+                f'INSERT INTO routes (t_nsec, tag, src_node, dst_node, active, route, category, hopcount) ' \
+                f'VALUES ({t_nsec}, "{p}", {src_node}, {dst_node}, {active}, "{route_str}", "{category}", {hopcount});'
+            )
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser(description='Convert parsed logs into a unified sqlite file. Create routes table from forwarding table')
+
+    parser.add_argument('scenariodir',
+                        metavar='SCENARIODIR',
+                        help='The directory holding user data set logs output from rexp-parse-logs. '
+                        'Each subdirectory is considered a separate dataset and the subdir name '
+                        'will be used to tag the data (tag field)')
+    parser.add_argument('sqlitefile',
+                        metavar='SQLITEFILE',
+                        help='The output sqlite file')
+
+    args = parser.parse_args()
+
+    if not os.path.isdir(args.scenariodir):
+        print(f'Bad SCENARIODIR "{args.scenariodir}", quitting', file=sys.stderr)
+        exit(2)
+
+    if os.path.isfile(args.sqlitefile):
+        print(f'SQLITEFILE "{args.sqlitefile}" already exists, quitting', file=sys.stderr)
+        exit(3)
+
+    tags = tuple(
+        sorted(
+            set([
+                d for d in os.listdir(args.scenariodir)
+                if os.path.isdir(os.path.join(args.scenariodir, d))
+            ])
+        )
+    )
+
+    con = sqlite3.connect(args.sqlitefile)
+
+    logfiles = {
+        t: LogfileSet(
+            os.path.join(args.scenariodir, t, 'tx.csv'),
+            os.path.join(args.scenariodir, t, 'rx.csv'),
+            os.path.join(args.scenariodir, t, 'routes.csv'),
+            os.path.join(args.scenariodir, t, 'positions.csv'),
+            os.path.join(args.scenariodir, t, 'flows.csv')
+        )
+        for t in tags
+    }
+
+    create_tables(con, tags)
+
+    flows_to_sqlite(con, logfiles)
+
+    positions_to_sqlite(con, logfiles)
+
+    timepoints = routes_to_sqlite(con, logfiles)
+
+    timepoints_to_sqlite(con, timepoints)

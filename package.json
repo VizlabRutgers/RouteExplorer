@@ -1,0 +1,25 @@
+{
+  "name": "manetviz",
+  "version": "1.0.0",
+  "description": "Visualization tools for MANET evaluation. The project aims to generate useful visualizations for evaluating and understanding the protocols used in MANET operation.",
+  "main": "index.js",
+  "type": "module",
+  "directories": {
+    "doc": "doc"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "concaveman": "^2.0.0",
+    "d3": "^7.9.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "rollup": "^4.56.0"
+  }
+}

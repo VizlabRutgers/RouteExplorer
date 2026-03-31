@@ -1,0 +1,516 @@
+#!/usr/bin/env python3
+
+import argparse
+import itertools
+import os
+import sys
+from collections import defaultdict
+
+import sqlite3
+import pandas as pd
+from routeexplore.routecategories import RouteCategories
+
+
+def dfs(nbrs_df, node, marked, count, ids):
+    marked[node] = True
+    ids[node] = count
+
+    node_nbrs = nbrs_df.loc[nbrs_df.node==node]
+
+    if node_nbrs.empty:
+        return
+
+    nbr_str = node_nbrs.iloc[0].neighbors
+    nbrs = sorted(map(int, nbr_str.split(',')))
+
+    for nbr in nbrs:
+        if not marked[nbr]:
+            dfs(nbrs_df, nbr, marked, count, ids)
+
+
+def get_flow_bounds(con):
+    flows_df = pd.read_sql('select * from flows', con)
+
+    flows = defaultdict(lambda: set())
+
+    for _,src,dst,start,stop in flows_df.itertuples():
+        flows[(src,dst)].add((start,stop))
+
+    return flows
+
+
+def calculate_connected_components(con, timestamps_df):
+    """
+    From Sedgewick and Wayne Algorithms Chapter 4
+    """
+    con.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS connected_components (
+          t_nsec INTEGER NOT NULL,
+          node INTEGER NOT NULL,
+          cc_num INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, node)
+        );"""
+    )
+
+    num_nodes = -1
+
+    con.cursor().execute("DELETE FROM connected_components")
+
+    for t_nsec in timestamps_df.t_nsec:
+        nbrs_df = pd.read_sql(f'select * from neighbors where t_nsec=={t_nsec}', con)
+
+        pos_df = pd.read_sql(f'select * from positions where t_nsec=={t_nsec}', con)
+
+        if nbrs_df.empty:
+            print(f'warning empty df')
+            continue
+
+        max_node = nbrs_df.node.max()
+        num_nodes = max_node+1
+        marked = [False] * num_nodes
+        ids = [0] * num_nodes
+        count = 0
+
+        # We are going to attempt to mark connected components ordered
+        # by location to get a consistent labeling that helps to
+        # stabilize the display of routes in the route matrix view.
+        for _,(_,node,_,_,_) in pos_df.sort_values(by=['y','x']).iterrows():
+            node = int(node) # for some reason read as a float
+            if not marked[node]:
+                count += 1
+                dfs(nbrs_df, node, marked, count, ids)
+
+            con.execute(
+                f'INSERT INTO connected_components (t_nsec, node, cc_num) ' \
+                f'VALUES ({t_nsec}, {node}, {ids[node]});'
+            )
+        print(f'calculate ccs: {t_nsec:10} {ids}')
+
+    con.commit()
+
+    return num_nodes
+
+
+def mark_connected_components(con, timestamps_df, num_nodes):
+    bidirectional_node_pairs = set(itertools.permutations(range(num_nodes), 2))
+
+    tags_df = pd.read_sql('select value from params where name="tags"', con)
+    tags = tuple(tags_df.values[0][0].split(','))
+
+    empty_route = ''
+
+    flows = get_flow_bounds(con)
+
+    total_src_dst_pairs = len(flows)
+
+    con.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS routes2 (
+          t_nsec INTEGER NOT NULL,
+          tag TEXT NOT NULL,
+          src_node INTEGER NOT NULL,
+          dst_node INTEGER NOT NULL,
+          active INTEGER NOT NULL,
+          route TEXT NOT NULL,
+          category TEXT NOT NULL,
+          hopcount INTEGER NOT NULL,
+          connected INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, src_node, dst_node)
+        );"""
+    )
+
+    con.cursor().execute("DELETE FROM routes2")
+
+    for t_nsec in timestamps_df.t_nsec:
+        t_node_pairs = defaultdict(lambda: set())
+
+        print(f'\rmark ccs: {t_nsec:10}', end='')
+
+        cc_df = pd.read_sql(f'select * from connected_components where t_nsec={t_nsec}', con)
+
+        ccs = {node:cc_num for _,_,node,cc_num in cc_df.itertuples()}
+
+        routes_df = pd.read_sql(f'select * from routes where t_nsec={t_nsec}', con)
+
+        for t in routes_df.itertuples():
+            t_node_pairs[t.tag].add((t.src_node, t.dst_node))
+
+            connected = 1 if ccs[t.src_node] == ccs[t.dst_node] else 0
+
+            con.execute(
+                f'INSERT INTO routes2 (t_nsec, tag, src_node, dst_node, active, route, category, hopcount, connected) ' \
+                f'VALUES ({t_nsec}, "{t.tag}", {t.src_node}, {t.dst_node}, {t.active}, "{t.route}", "{t.category}", {t.hopcount}, {connected});'
+            )
+
+        no_route_pairs = defaultdict(lambda: set())
+        for tag in tags:
+            no_route_pairs[tag] = bidirectional_node_pairs.difference(t_node_pairs[tag])
+
+        for tag,pairs in sorted(no_route_pairs.items()):
+            for src_node,dst_node in pairs:
+                connected = 1 if ccs[src_node] == ccs[dst_node] else 0
+
+                bounds = flows.get((src_node, dst_node))
+
+                active = any(map(lambda x: t_nsec>=x[0] and t_nsec<=x[1], bounds)) if bounds else False
+
+                con.execute(
+                    f'INSERT INTO routes2 (t_nsec, tag, src_node, dst_node, active, route, category, hopcount, connected) ' \
+                    f'VALUES ({t_nsec}, "{tag}", {src_node}, {dst_node}, {active}, "{empty_route}", "noroute", 0, {connected});'
+                )
+
+    print()
+    con.commit()
+
+
+def route_counts(con, timestamps_df):
+    """
+    From routes 2, count number of routes partitioned by
+    (tag,catebory,src_node,active,connected) and form route_counts.
+    """
+    con.cursor().execute('DROP TABLE IF EXISTS route_counts;')
+
+    con.cursor().execute(
+        """
+        CREATE TABLE route_counts (
+          t_nsec INTEGER NOT NULL,
+          tag TEXT NOT NULL,
+          src_node INTEGER NOT NULL,
+          active INTEGER NOT NULL,
+          connected INTEGER NOT NULL,
+          category TEXT NOT NULL,
+          count INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, src_node, category, active, connected)
+        );"""
+    )
+
+    last_t_nsec = -1;
+    for t_nsec in timestamps_df.t_nsec:
+        routes_t_df = pd.read_sql(f'select * from routes2 where t_nsec=={t_nsec}', con)
+
+        counts = routes_t_df.groupby(['tag', 'src_node', 'category', 'active', 'connected', 'hopcount']).count().dst_node
+
+        if not t_nsec == last_t_nsec:
+            print(f'\rroute_counts {t_nsec}', end='')
+
+        for (tag,src_node,cat,active,connected,hopcount),count in counts.items():
+            catfield = RouteCategories.toField(cat, hopcount)
+            print('###', t_nsec, tag, src_node, active, connected, catfield, count)
+            con.execute(
+                f'INSERT INTO route_counts (t_nsec, tag, src_node, active, connected, category, count) ' \
+                f'VALUES ({t_nsec}, "{tag}", {src_node}, {active}, {connected}, "{catfield}", {count});'
+            )
+
+    print()
+
+    con.commit()
+
+
+def flatten_metrics(rm_df):
+    print('flatten_metrics')
+    # flatten rm_df to a list of dictionaries with format
+    # {
+    #     t: t_nsec,
+    #     tag: tag,
+    #     src_node: src_node,
+    #     active: active,
+    #     connected: connected,
+    #     noroute: count
+    #     broken: count,
+    #     incomplete: count,
+    #     loop: count,
+    #     valid: count
+    # }
+    #
+    # these records can be filtered and processed on front end side
+    # for graphing
+
+    last_t_nsec = None
+    records_by_route_type = []
+    records_total = []
+    records_total_by_node = []
+    time_step_counts = defaultdict(lambda: {r.name.lower(): 0 for r in RouteCategories})
+    time_step_totals = defaultdict(lambda: {r.name.lower(): 0 for r in RouteCategories})
+    time_step_node_totals = defaultdict(lambda: {r.name.lower(): 0 for r in RouteCategories})
+
+    for _,tpl in rm_df.iterrows():
+        if not tpl.t_nsec == last_t_nsec:
+            print(f'\rflatten metrics: {tpl.t_nsec:10}', end='')
+
+            if last_t_nsec is not None:
+                for (p,a,c),counts in sorted(time_step_counts.items()):
+                    record = {
+                        't_nsec': last_t_nsec,
+                        'tag': p,
+                        'active': a,
+                        'connected': c
+                    }
+                    record.update(counts)
+                    records_by_route_type.append(record)
+                time_step_counts = defaultdict(lambda: {r.name.lower(): 0 for r in RouteCategories})
+
+                for p,counts in sorted(time_step_totals.items()):
+                    record = {
+                        't_nsec': last_t_nsec,
+                        'tag': p
+                    }
+                    record.update(counts)
+                    records_total.append(record)
+                time_step_totals = defaultdict(lambda: {r.name.lower(): 0 for r in RouteCategories})
+
+                for (p,src_node),counts in sorted(time_step_node_totals.items()):
+                    record = {
+                        't_nsec': last_t_nsec,
+                        'tag': p,
+                        'src_node': src_node
+                    }
+                    record.update(counts)
+                    records_total_by_node.append(record)
+                time_step_node_totals = defaultdict(lambda: {r.name.lower(): 0 for r in RouteCategories})
+
+            last_t_nsec = tpl.t_nsec
+
+        time_step_counts[
+            (tpl.tag, tpl.active, tpl.connected)
+        ][tpl.category] += tpl["count"]
+
+        time_step_totals[tpl.tag][tpl.category] += tpl["count"]
+
+        time_step_node_totals[
+            (tpl.tag,tpl.src_node)
+        ][tpl.category] += tpl["count"]
+
+    for (p,a,c),counts in sorted(time_step_counts.items()):
+        record = {
+            't_nsec': last_t_nsec,
+            'tag': p,
+            'active': a,
+            'connected': c
+        }
+        record.update(counts)
+        records_by_route_type.append(record)
+
+    for p,counts in sorted(time_step_totals.items()):
+        record = {
+            't_nsec': last_t_nsec,
+            'tag': p
+        }
+        record.update(counts)
+        records_total.append(record)
+
+    for (p,src_node),counts in sorted(time_step_node_totals.items()):
+        record = {
+            't_nsec': last_t_nsec,
+            'tag': p,
+            'src_node': src_node
+        }
+        record.update(counts)
+        records_total_by_node.append(record)
+
+    return (records_by_route_type, records_total, records_total_by_node)
+
+
+
+def write_metrics(con, records_by_route_type):
+    print('write_metrics')
+    """
+    route_counts only contains entries for routes that actually
+    exist. we want to include counts so that every source and
+    destination pair is tabulated. in this case the missing
+    category would be "noroute" to indicate source nodes
+    that have no forwarding entry for a destination.
+    """
+    con.cursor().execute('DROP TABLE IF EXISTS route_metrics;')
+
+    con.cursor().execute(
+        """
+        CREATE TABLE route_metrics (
+          t_nsec INTEGER NOT NULL,
+          tag TEXT NOT NULL,
+          active INTEGER NOT NULL,
+          connected INTEGER NOT NULL,
+          noroute INTEGER NOT NULL,
+          broken INTEGER NOT NULL,
+          incomplete INTEGER NOT NULL,
+          loop INTEGER NOT NULL,
+          valid1 INTEGER NOT NULL,
+          valid2 INTEGER NOT NULL,
+          valid3 INTEGER NOT NULL,
+          valid4 INTEGER NOT NULL,
+          valid5 INTEGER NOT NULL,
+          valid6 INTEGER NOT NULL,
+          valid7 INTEGER NOT NULL,
+          valid8 INTEGER NOT NULL,
+          valid9 INTEGER NOT NULL,
+          valid10 INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, connected, active)
+        );"""
+    )
+
+    # need to partition by connected status too
+    for r in records_by_route_type:
+        tag = r["tag"]
+        con.execute(
+            f'INSERT INTO route_metrics (t_nsec, tag, active, connected, noroute, broken, incomplete, loop, valid1, valid2, valid3, valid4, valid5, valid6, valid7, valid8, valid9, valid10) ' \
+            f'VALUES ({r["t_nsec"]}, "{tag}", {r["active"]}, {r["connected"]}, {r["noroute"]}, {r["broken"]}, {r["incomplete"]}, {r["loop"]}, {r["valid1"]}, {r["valid2"]}, {r["valid3"]}, {r["valid4"]}, {r["valid5"]}, {r["valid6"]}, {r["valid7"]}, {r["valid8"]}, {r["valid9"]}, {r["valid10"]});'
+        )
+
+    con.commit()
+
+
+def write_metric_totals(con, records_total):
+    print('write_metric_totals')
+    """
+    route_counts only contains entries for routes that actually
+    exist. we want to include counts so that every source and
+    destination pair is tabulated. in this case the missing
+    category would be "noroute" to indicate source nodes
+    that have no forwarding entry for a destination.
+    """
+    con.cursor().execute('DROP TABLE IF EXISTS route_metric_totals;')
+
+    con.cursor().execute(
+        """
+        CREATE TABLE route_metric_totals (
+          t_nsec INTEGER NOT NULL,
+          tag TEXT NOT NULL,
+          noroute INTEGER NOT NULL,
+          broken INTEGER NOT NULL,
+          incomplete INTEGER NOT NULL,
+          loop INTEGER NOT NULL,
+          valid1 INTEGER NOT NULL,
+          valid2 INTEGER NOT NULL,
+          valid3 INTEGER NOT NULL,
+          valid4 INTEGER NOT NULL,
+          valid5 INTEGER NOT NULL,
+          valid6 INTEGER NOT NULL,
+          valid7 INTEGER NOT NULL,
+          valid8 INTEGER NOT NULL,
+          valid9 INTEGER NOT NULL,
+          valid10 INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag)
+        );"""
+    )
+
+    # need to partition by connected status too
+    for r in records_total:
+        tag = r["tag"]
+        con.execute(
+            f'INSERT INTO route_metric_totals (t_nsec, tag, noroute, broken, incomplete, loop, valid1, valid2, valid3, valid4, valid5, valid6, valid7, valid8, valid9, valid10) ' \
+            f'VALUES ({r["t_nsec"]}, "{tag}", {r["noroute"]}, {r["broken"]}, {r["incomplete"]}, {r["loop"]}, {r["valid1"]}, {r["valid2"]}, {r["valid3"]}, {r["valid4"]}, {r["valid5"]}, {r["valid6"]}, {r["valid7"]}, {r["valid8"]}, {r["valid9"]}, {r["valid10"]});'
+        )
+
+    con.commit()
+
+
+def write_metric_totals_by_node(con, records):
+    print('write_metrics_by_node')
+
+    con.cursor().execute('DROP TABLE IF EXISTS route_metrics_by_node;')
+
+    con.cursor().execute(
+        """
+        CREATE TABLE route_metrics_by_node (
+          t_nsec INTEGER NOT NULL,
+          tag TEXT NOT NULL,
+          src_node INTEGER NOT NULL,
+          noroute INTEGER NOT NULL,
+          broken INTEGER NOT NULL,
+          incomplete INTEGER NOT NULL,
+          loop INTEGER NOT NULL,
+          valid1 INTEGER NOT NULL,
+          valid2 INTEGER NOT NULL,
+          valid3 INTEGER NOT NULL,
+          valid4 INTEGER NOT NULL,
+          valid5 INTEGER NOT NULL,
+          valid6 INTEGER NOT NULL,
+          valid7 INTEGER NOT NULL,
+          valid8 INTEGER NOT NULL,
+          valid9 INTEGER NOT NULL,
+          valid10 INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, src_node)
+        );"""
+    )
+
+    # need to partition by connected status too
+    for r in records:
+        tag = r["tag"]
+        con.execute(
+            f'INSERT INTO route_metrics_by_node (t_nsec, tag, src_node, noroute, broken, incomplete, loop, valid1, valid2, valid3, valid4, valid5, valid6, valid7, valid8, valid9, valid10) ' \
+            f'VALUES ({r["t_nsec"]}, "{tag}", {r["src_node"]}, {r["noroute"]}, {r["broken"]}, {r["incomplete"]}, {r["loop"]}, {r["valid1"]}, {r["valid2"]}, {r["valid3"]}, {r["valid4"]}, {r["valid5"]}, {r["valid6"]}, {r["valid7"]}, {r["valid8"]}, {r["valid9"]}, {r["valid10"]});'
+        )
+
+    con.commit()
+
+
+def route_metrics(con, num_nodes):
+    print('route_metrics')
+    total_routes = num_nodes * (num_nodes - 1)
+
+    total_src_dst_pairs = len(get_flow_bounds(con))
+
+    rc_df = pd.read_sql('select * from route_counts', con)
+
+    ts = rc_df.t_nsec.unique()
+    tags = rc_df.tag.unique()
+    src_nodes = rc_df.src_node.unique()
+    cats = rc_df.category.unique()
+
+    """
+    create a totals_df that has row entries for cartesian product of factors
+
+       t_nsec x tag x src_node X categories x active x connected
+
+    the table will hold route counts organized by these
+    """
+    zeros_entries = list(itertools.product(ts, tags, src_nodes, cats, (0,1), (0,1), (0,)))
+    zeros_df = pd.DataFrame(zeros_entries,
+                            columns=['t_nsec', 'tag', 'src_node', 'category', 'active', 'connected', 'count'])
+    print(f'rc_df.shape {rc_df.shape}, zeros_df.shape {zeros_df.shape}')
+    rc_df.set_index(['t_nsec', 'tag', 'src_node', 'category', 'active', 'connected'], inplace=True)
+    zeros_df.set_index(['t_nsec', 'tag', 'src_node', 'category', 'active', 'connected'], inplace=True)
+
+    total_df = rc_df + zeros_df
+    total_df.fillna(0, inplace=True)
+    total_df = total_df['count'].astype(int)
+
+    total_df = total_df.to_frame().reset_index()
+    print(total_df.head(48))
+
+    records_by_route_type, records_total, records_total_by_node = flatten_metrics(total_df)
+    write_metrics(con, records_by_route_type)
+    write_metric_totals(con, records_total)
+    write_metric_totals_by_node(con, records_total_by_node)
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser(description='Convert trace log into multiple txt files')
+
+    parser.add_argument('sqlite',
+                        metavar='SQLITEFILE',
+                        help='The input and output sqlite file, the script adds a connected_components table.')
+
+    args = parser.parse_args()
+
+    if not os.path.exists(args.sqlite):
+        print(f'Bas sqlite file, quitting', file=sys.stderr)
+        exit(1)
+
+    con = sqlite3.connect(args.sqlite)
+
+    timestamps_df = pd.read_sql('select * from timestamps', con)
+
+    # create connected_components table that marks the component number
+    # for each node at every timestamp
+    num_nodes = calculate_connected_components(con, timestamps_df)
+    #num_nodes = 50
+
+    # create routes2 table that is simply routes but with new
+    # cc column to designate whether the route source and destination
+    # are in the same connected components
+    mark_connected_components(con, timestamps_df, num_nodes)
+
+    route_counts(con, timestamps_df)
+
+    route_metrics(con, num_nodes)

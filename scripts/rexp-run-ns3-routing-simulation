@@ -1,0 +1,20 @@
+#!/bin/bash
+
+if [ ! $# -eq 3 ]; then
+    echo "usage: rexp-run-ns3-routing-simulation NSSDEV SIMULATION OUTDIR"
+    exit 1
+fi
+
+ns3home=$1
+simulation=$2
+outdir=$3
+
+ns3app=$ns3home/ns3
+echo $ns3home
+
+echo "olsr"
+$ns3app run "$simulation --traceMobility=true --protocol=OLSR" >$outdir/olsr.log
+echo "aodv"
+$ns3app run "$simulation --traceMobility=true --protocol=AODV" >$outdir/aodv.log
+echo "dsdv"
+$ns3app run "$simulation --traceMobility=true --protocol=DSDV" >$outdir/dsdv.log
