@@ -1,5 +1,5 @@
 {
-  "name": "manetviz",
+  "name": "routeexplorer",
   "version": "1.0.0",
   "description": "Visualization tools for MANET evaluation. The project aims to generate useful visualizations for evaluating and understanding the protocols used in MANET operation.",
   "main": "index.js",

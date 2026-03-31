@@ -85,7 +85,11 @@ def serve_css(filename):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Run manetviz server')
+    parser = argparse.ArgumentParser(description='Run routeexplorer server')
+    parser.add_argument('-p', '--port',
+                        type=int,
+                        default=8000,
+                        help='Listening port, default 8000')
     parser.add_argument('tidysqlite',
                         metavar='TIDYSQLITE',
                         help='The tidy sqlite file')
@@ -99,4 +103,4 @@ if __name__ == '__main__':
     print('done')
 
     # set debug=False to avoid reloading and double load on start
-    app.run(port=8000, debug=True)
+    app.run(port=args.port, debug=False)

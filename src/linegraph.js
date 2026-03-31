@@ -153,7 +153,8 @@ function drawRouteStack(filteredRecords) {
 
 
 function drawOverlayReceptions() {
-    const checked = d3.select("#rxscheck").node().checked;
+    //const checked = d3.select("#rxscheck").node().checked;
+    const checked = false;
 
     const tag = d3.select("#tag").node().value;
 

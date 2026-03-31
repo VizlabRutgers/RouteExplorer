@@ -1,18 +1,18 @@
-# manetviz/scripts
+# routeexplorer/scripts
 
 This directory contains scripts to execute ns-3 routing experimint
 and convert it to a dataset in multiple steps. The resulting
 dataset is contained in a single sqlite file and is served by
-the manetviz web application.
+the routeexplorer web application.
 
 The initial raw data are ns-3 simulator traces that are
-processed into an sqlite file serverd by the manetviz REST API.
+processed into an sqlite file serverd by the routeexplorer REST API.
 
 For this project the same scenario is executed running AODV, DSDV and
 OLSR, the three unicast routing protocols included with ns-3.
 
 The capture and translation of ns-3 trace information is accomplished
-by these python scripts in the manetviz/scripts directory:
+by these python scripts in the routeexplorer/scripts directory:
 
 ```
     1. rexp-run-manet-routing-compare

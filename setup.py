@@ -1,12 +1,12 @@
 from setuptools import setup
 
 setup(description='MANET Visualizer',
-      name='manetviz',
+      name='routeexplorer',
       author='Eric Schreiber',
       version='0.1.1',
       author_email='eric.schreiber at rutgers dot edu',
       license='BSD',
-      url='https://gitlab.com/eschreib/manetviz',
+      url='https://gitlab.com/eschreib/routeexplorer',
       packages=['routeexplore'],
       scripts=['scripts/rexp-add-metrics',
                'scripts/rexp-annotate',

@@ -16,6 +16,7 @@
 	  <h2>Route Explorer</h2>
 	</div>
 
+	<div><h4>Filters</h4></div>
 	<div class="control">
 	  <label for="tag">tag:</label>
 	  <select id="tag" name="tag">
@@ -24,15 +25,6 @@
 	    {% endfor %}
 	  </select>
 	</div>
-	<div class="control">
-	  <label for="ccbreakscheck">breaks:</label>
-	  <input id="ccbreakscheck" type="checkbox" checked/>
-	</div>
-	<div class="control">
-	  <label for="rxscheck">receptions:</label>
-	  <input id="rxscheck" type="checkbox" checked/>
-	</div>
-	<hr/>
 	<div class="control">
 	  <label for="category">category:</label>
 	  <select id="category" name="category">
@@ -49,8 +41,21 @@
  	  <label for="maxhops">max hops:</label>
 	  <input type="number" id="maxhops" name="maxhops" min="1" max="10" value="10">
 	</div>
+	<hr/>
+	<div><h4>Time Plot</h4></div>
 	<div class="control">
-	  <label for="filtercheck">filter:</label>
+	  <label for="ccbreakscheck">breaks:</label>
+	  <input id="ccbreakscheck" type="checkbox" checked/>
+	</div>
+	<!--
+	<div class="control">
+	  <label for="rxscheck">receptions:</label>
+	  <input id="rxscheck" type="checkbox" checked/>
+	</div>-->
+	<hr/>
+	<div><h4>Matrix</h4></div>
+	<div class="control">
+	  <label for="filtercheck">category:</label>
 	  <input id="filtercheck" type="checkbox" unchecked/>
 	</div>
 	<div class="control">
@@ -58,6 +63,7 @@
 	  <input id="activecheck" type="checkbox" unchecked/>
 	</div>
 	<hr/>
+	<div><h4>Node Link</h4></div>
 	<div class="control">
 	  <label for="componentscheck">components:</label>
 	  <input id="componentscheck" type="checkbox" checked/>
@@ -67,6 +73,7 @@
 	  <input id="linkscheck" type="checkbox"/>
 	</div>
 	<hr/>
+	<div><h4>Legend</h4></div>
 	<div class="control">
 	  <svg id="legend">
 	  </svg>
