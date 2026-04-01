@@ -50,6 +50,7 @@ let svg = div.select('svg');
 let xscale = null;
 let yscale = null;
 let ccPolygons = new Map();
+let routeSelected = null;
 
 export const NODE_LINK_PADDING = {top:10, right:20, bottom:40, left:40};
 
@@ -71,10 +72,8 @@ function onNodeClick(e, d, obj) {
     if (altclick) {
 	console.log(`onNode Click ${state.source} ${node_num} ${state.destination===node_num}`)
 	if(state.sameSrcDst(state.source, node_num)) {
-	    console.log(`here1`);
 	    clearDst();
 	} else {
-	    console.log(`here2`);
 	    setDst(node_num);
 	}
     } else {
@@ -96,6 +95,10 @@ function onCategoryChange(categoryState) {
 
 function onStateChange(oldState, newState) {
     console.log(`nodelink onStateChange src:${oldState.source}->${newState.source} dst:${oldState.destination}->${newState.destination}`);
+
+    if (newState.selectionState !== SelectionState.SRCDST) {
+	routeSelected = null;
+    }
 
     updateNodeLink();
 }
@@ -184,8 +187,8 @@ function highlightPaths(data) {
     plainNodes.delete(state.source);
     sourceNodes.add(state.source);
 
+    routeSelected = null;
 
-    
     const srcPaths = getSrcPaths(data, state);
 
     for (let [pathDst,hops] of Object.entries(srcPaths)) {
@@ -203,6 +206,7 @@ function highlightPaths(data) {
 	    if (pathDst !== state.destination) {
 		continue;
 	    }
+	    routeSelected = [state.source].concat(hops);
 	}
 
 	let n1 = state.source;
@@ -344,6 +348,14 @@ export function updateNodeLink() {
 	.attr("fill", TEXT_COLOR)
 	.attr("class", "label")
 	.attr("transform", `translate(${[20, dim.height/1.9]}) rotate(270)`)
+
+    if (routeSelected !== null) {
+	txtovl.append("text")
+	    .text(`route: ${routeSelected.join('-')}`)
+	    .attr("fill", TEXT_COLOR)
+	    .attr("class", "label")
+	    .attr("transform", `translate(${[0.01 * dim.width, dim.height-10]})`)
+    }
 }
 
 

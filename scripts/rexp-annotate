@@ -340,7 +340,7 @@ def mark_broken_routes(con_in, con_out, hopcount_limit, timepoints_df):
             path = list(map(int, r.route.split('-')))
             hops = [r.src_node] + path
             pairs = zip(hops[:-1],hops[1:])
-            route_to_break = [r.src_node]
+            route_to_break = []
 
             broken = False
             for n1,n2 in pairs:
@@ -354,7 +354,7 @@ def mark_broken_routes(con_in, con_out, hopcount_limit, timepoints_df):
             # up to the last connected node
             if broken:
                 category = 'broken'
-                if len(route_to_break) > 1:
+                if len(route_to_break) >= 1:
                     route = '-'.join(map(str, route_to_break))
                 else:
                     route = ''
