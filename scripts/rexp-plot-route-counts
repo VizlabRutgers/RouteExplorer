@@ -1,0 +1,102 @@
+#!/usr/bin/python3
+
+import argparse
+
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+def plot_categories_vs_time(rm_df, prots, cats):
+    rm_counts = rm_df.groupby(['t_nsec', 'tag', 'category']).sum()['count']
+
+    rm_counts = rm_counts.unstack(['category', 'tag'])
+
+    print(rm_counts.head(20))
+
+    ymax = rm_counts.max().max()
+
+    fig = plt.figure(figsize=(12,12))
+
+    for i,cat in enumerate(cats, start=1):
+        ax = fig.add_subplot(len(cats),1,i)
+
+        rm_counts[cat].plot(ax=ax)
+
+        ax.set_ylim([0, ymax])
+
+    fig.savefig(f'total-routes-by-category-vs-time.png')
+
+
+def plot_total_routes_by_tag(rm_df, prots, cats):
+    rm_counts = rm_df.groupby(['t_nsec', 'tag', 'category']).sum()['count']
+
+    rm_counts = rm_counts.unstack(['tag', 'category'])
+
+    print(rm_counts.head())
+
+    ymax = rm_counts.max().max()
+
+    fig = plt.figure(figsize=(12,12))
+
+    for i,prot in enumerate(prots, start=1):
+        ax = fig.add_subplot(len(prots),1,i)
+
+        rm_counts[prot].plot(ax=ax)
+
+        ax.set_ylim([0, ymax])
+
+    fig.savefig(f'total-routes-by-tag-vs-time.png')
+
+
+
+def plot_total_active_routes_by_tag(rm_df, prots, cats):
+    rm_counts = rm_df.groupby(['t_nsec', 'active', 'tag', 'category']).sum()['count']
+
+    rm_counts = rm_counts.unstack(['active', 'tag', 'category'])
+
+    ymax = rm_counts[1].max().max()
+
+    fig = plt.figure(figsize=(12,12))
+
+    for i,prot in enumerate(prots, start=1):
+        ax = fig.add_subplot(len(prots),1,i)
+
+        rm_counts[1][prot].plot(ax=ax)
+
+        ax.set_ylim([0, ymax])
+
+    fig.savefig(f'total-active-routes-by-tag-vs-time.png')
+
+
+def main():
+    parser = argparse.ArgumentParser(description='plot route counts')
+
+    parser.add_argument('insqlite',
+                        metavar='INSQLITE',
+                        help='The input sqlite file')
+
+    args = parser.parse_args()
+
+    con = sqlite3.connect(args.insqlite)
+
+    plt.style.use('ggplot')
+
+    rm_df = pd.read_sql('select * from route_metrics', con)
+    #rm_df = rm_df['count'].astype(int)
+
+    print(rm_df.head(20))
+
+    prots = rm_df.tag.unique()
+
+    cats = rm_df.category.unique()
+
+    plot_categories_vs_time(rm_df, prots, cats)
+
+    plot_total_routes_by_tag(rm_df, prots, cats)
+
+    plot_total_active_routes_by_tag(rm_df, prots, cats)
+
+
+if __name__=='__main__':
+    main()

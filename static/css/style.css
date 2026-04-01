@@ -1,0 +1,109 @@
+@media screen and (orientation: landscape) {
+
+    /*
+      Page centering markup rules (display: table, table-cell etc) for html and body elements
+      come from here:
+
+      https://stackoverflow.com/questions/6464592/how-to-align-the-entire-html-body-to-the-center
+   */
+
+    html, body {
+	background-color: #12385f;
+    }
+
+    body {
+	color: #cccccc;
+	font: 18px sans-serif;
+    }
+
+    h2 {
+	font-weight: bold;
+	font: 24px sans-serif;
+    }
+
+    #header {
+	padding: 0px 6px;
+    }
+
+    h4 {
+	padding: 3px 8px;
+	margin: 0px;
+    }
+
+    #legend {
+	width: 200px;
+	height: 300px;
+    }
+
+    text.label {
+	color: #cccccc;
+	font: 18px sans-serif;
+    }
+
+    .container {
+	margin: 25px 10px;
+	display: grid;
+	grid-template-columns: 200px 480px auto auto;
+	grid-template-rows: 350px 480px;
+	gap: 20px 20px;
+    }
+
+    #controls {
+	grid-row: 1/-1;
+	border: 1px solid #154472;
+	border-radius: 10px;
+	background-color: #154472;
+	margin: 0px 0px 20px 0px;
+    }
+
+    .control {
+	padding: 4px 4px 4px 20px;
+    }
+
+    hr {
+	background-color: #cccccc;
+	height: 1px;
+	border-width: 0px;
+    }
+
+    #depthrange {
+	padding-left: 9px;
+	width: 70px;
+    }
+
+    #timegraphsdiv {
+	grid-column: 2/-1;
+    }
+
+    #matrixdiv {
+	grid-column: 2;
+	margin: 0px 0px 0px 0px;
+    }
+
+    #matrixccs {
+	/* do not handle clicks, let it pass through to next layer */
+	pointer-events: none;
+    }
+
+    #nodelinkdiv {
+	grid-column: 3/-1;
+	border: 1px solid #154472;
+	border-radius: 10px;
+	background-color: #154472;
+	margin: 0px 0px 20px 0px;
+    }
+
+    .cc {
+	stroke: gray;
+	stroke-width: 0;
+	stroke-opacity: 0.5;
+	fill-opacity: 0.5;
+	stroke-linejoin: round;
+	fill: gray;
+    }
+
+    #timeoverlay {
+	font: 18px sans-serif;
+	fill: #010101;
+    }
+}

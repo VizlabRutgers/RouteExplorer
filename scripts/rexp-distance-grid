@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+
+import argparse
+import itertools
+import math
+import os
+import sys
+
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+def calc_distances(pos, dlinkbreak):
+    ts = [t for t in pos.t_nsec.unique()
+          if t % 1000000000 == 0]
+
+    node_pairs = list(itertools.combinations(pos.node.unique(), 2))
+
+    pos.set_index(['t_nsec', 'node'], inplace=True)
+
+    distances = []
+
+    for t_nsec in ts:
+        t_sec = t_nsec / 1000000000
+
+        for n1,n2 in node_pairs:
+            p1 = pos.loc[(t_nsec,n1)]
+            p2 = pos.loc[(t_nsec,n2)]
+            d = math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2)
+            distances.append((t_sec,n1,n2,d,d>=dlinkbreak))
+            print(distances[-1])
+    return pd.DataFrame(distances, columns=('t', 'n1', 'n2', 'distance','broken'))
+
+
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser(description='Facet grid pairwise distances with hue over/under link break')
+
+    parser.add_argument('--dlinkbreak',
+                        metavar='DLINKBREAK',
+                        default=139.0,
+                        type=float,
+                        help='The distance in meters that a link is considered to be broken')
+    parser.add_argument('insqlite',
+                        metavar='INSQLITE',
+                        help='The input sqlite file')
+    parser.add_argument('outfile',
+                        metavar='OUTFILE',
+                        help='Output graph file')
+
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.insqlite):
+        print(f'Bad inputfile "{args.insqlite}", quitting', file=sys.stderr)
+        exit(1)
+
+    plt.style.use('ggplot')
+
+    con_in = sqlite3.connect(args.insqlite)
+
+    positions = pd.read_sql('select * from positions', con_in)
+
+    distances_df = calc_distances(positions, args.dlinkbreak)
+
+    print(distances_df)
+    fig = plt.figure()
+
+    grid = sns.FacetGrid(distances_df,
+                         hue='broken',
+                         row='n1',
+                         col='n2',
+                         row_order=sorted(distances_df.n1.unique()),
+                         col_order=sorted(distances_df.n2.unique()))
+
+    grid.map(plt.plot, "t", "distance", marker='.', linestyle='none')
+
+    plt.savefig(args.outfile)

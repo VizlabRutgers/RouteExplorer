@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+
+<html lang="en">
+  <head>
+    <title>Route Explorer</title>
+
+    <link rel="stylesheet" href="css/style.css">
+  </head>
+
+  <body onload="onLoad()">
+    <div class="container">
+
+      <div id="controls">
+	<div id="header">
+	  <h2>Route Explorer</h2>
+	</div>
+
+	<div><h4>Filters</h4></div>
+	<div class="control">
+	  <label for="tag">tag:</label>
+	  <select id="tag" name="tag">
+	    {% for t in tags %}
+	    <option value={{ t }}>{{ t }}</option>
+	    {% endfor %}
+	  </select>
+	</div>
+	<div class="control">
+	  <label for="category">category:</label>
+	  <select id="category" name="category">
+	    {% for c in categories %}
+	    <option value={{ c }}>{{ c }}</option>
+	    {% endfor %}
+	  </select>
+	</div>
+	<div class="control">
+ 	  <label for="minhops">min hops:</label>
+	  <input type="number" id="minhops" name="minhops" min="1" max="10" value="1">
+	</div>
+	<div class="control">
+ 	  <label for="maxhops">max hops:</label>
+	  <input type="number" id="maxhops" name="maxhops" min="1" max="10" value="10">
+	</div>
+	<hr/>
+	<div><h4>Time Plot</h4></div>
+	<div class="control">
+	  <label for="ccbreakscheck">breaks:</label>
+	  <input id="ccbreakscheck" type="checkbox" checked/>
+	</div>
+	<!--
+	<div class="control">
+	  <label for="rxscheck">receptions:</label>
+	  <input id="rxscheck" type="checkbox" checked/>
+	</div>-->
+	<hr/>
+	<div><h4>Matrix</h4></div>
+	<div class="control">
+	  <label for="filtercheck">category:</label>
+	  <input id="filtercheck" type="checkbox" unchecked/>
+	</div>
+	<div class="control">
+	  <label for="activecheck">active:</label>
+	  <input id="activecheck" type="checkbox" unchecked/>
+	</div>
+	<hr/>
+	<div><h4>Node Link</h4></div>
+	<div class="control">
+	  <label for="componentscheck">components:</label>
+	  <input id="componentscheck" type="checkbox" checked/>
+	</div>
+	<div class="control">
+	  <label for="linkscheck">links:</label>
+	  <input id="linkscheck" type="checkbox"/>
+	</div>
+	<hr/>
+	<div><h4>Legend</h4></div>
+	<div class="control">
+	  <svg id="legend">
+	  </svg>
+	</div>
+      </div>
+
+      <div id="timegraphsdiv">
+	<svg id="timegraphs">
+	  <g id="timeaxes"/>
+	  <g id="timepaths"/>
+	  <g id="overlaypaths"/>
+	  <g id="ccbreaks"/>
+	  <g id="cursor"/>
+	  <g class="textoverlay">
+	</svg>
+      </div>
+
+      <div id="matrixdiv">
+	<svg id="matrix">
+	  <g id="matrixcells"/>
+	  <g id="matrixccs"/>
+	  <g class="textoverlay">
+	</svg>
+      </div>
+
+      <div id="nodelinkdiv">
+	<svg>
+	  <g id="nodelink">
+	    <g class="phylinks"/>
+	    <g class="components"/>
+	    <g class="edges0"/>
+	    <g class="edges10"/>
+	    <g class="edges9"/>
+	    <g class="edges8"/>
+	    <g class="edges7"/>
+	    <g class="edges6"/>
+	    <g class="edges5"/>
+	    <g class="edges4"/>
+	    <g class="edges3"/>
+	    <g class="edges2"/>
+	    <g class="edges1"/>
+	    <g class="nodes"/>
+	    <g class="textoverlay">
+	  </g>
+	</svg>
+      </div>
+    </div>
+
+    <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+  </body>
+</html>

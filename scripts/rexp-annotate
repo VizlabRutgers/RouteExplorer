@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+
+import argparse
+from collections import defaultdict
+import copy
+from itertools import combinations
+import math
+import os
+import sys
+
+import pandas as pd
+import sqlite3
+
+from routeexplore.routecategories import RouteCategories
+from routeexplore.consts import DEFAULT_MAX_EDGE_DISTANCE
+
+def save_params(con_out, args, tags):
+    con_out.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS params (
+          name TEXT NOT NULL,
+          value TEXT NOT NULL,
+          PRIMARY KEY(name)
+        );"""
+    )
+
+    con_out.execute(
+        f'INSERT INTO params (name, value) ' \
+        f'VALUES ("link_distance", {args.link_distance:.1f});'
+    )
+
+    con_out.execute(
+        f'INSERT INTO params (name, value) ' \
+        f'VALUES ("max_hopcount", {args.hopcount_limit});'
+    )
+
+    ps = ",".join(sorted(tags))
+    con_out.execute(
+        f'INSERT INTO params (name, value) ' \
+        f'VALUES ("tags", "{ps}");'
+    )
+
+    con_out.commit()
+
+
+def copy_timepoints(con_in, con_out):
+    timepoints_df = pd.read_sql('select * from timepoints', con_in)
+
+    con_out.cursor().execute('DROP TABLE IF EXISTS timestamps;')
+
+    con_out.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS timestamps (
+          t_nsec INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec)
+        );"""
+    )
+
+    for t_nsec in timepoints_df.t_nsec:
+        con_out.execute(
+                f'INSERT INTO timestamps (t_nsec) ' \
+                f'VALUES ({t_nsec});'
+            )
+
+    con_out.commit()
+
+    return timepoints_df
+
+
+def copy_tags(con_in, con_out):
+    tags_df = pd.read_sql('select * from tags', con_in)
+
+    con_out.cursor().execute('DROP TABLE IF EXISTS tags;')
+
+    con_out.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS tags (
+          tag text NOT NULL,
+          PRIMARY KEY(tag)
+        );"""
+    )
+
+
+    for t in list(tags_df.tag):
+        con_out.execute(
+            f'INSERT INTO tags (tag) VALUES ("{t}");'
+        )
+
+    con_out.commit()
+
+
+def copy_flows(con_in, con_out):
+    flows_df = pd.read_sql('select * from flows', con_in)
+
+    con_out.cursor().execute('DROP TABLE IF EXISTS flows;')
+
+    # flows table
+    con_out.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS flows (
+          src_node INTEGER NOT NULL,
+          dst_node INTEGER NOT NULL,
+          t_nsec_start INTEGER NOT NULL,
+          t_nsec_stop INTEGER NOT NULL,
+          PRIMARY KEY(src_node, dst_node, t_nsec_start)
+        );"""
+    )
+
+    for t in flows_df.itertuples():
+        con_out.execute(
+                f'INSERT INTO flows (src_node, dst_node, t_nsec_start, t_nsec_stop) ' \
+                f'VALUES ({t.src_node}, {t.dst_node}, {t.t_nsec_start}, {t.t_nsec_stop});'
+            )
+
+    con_out.commit()
+
+
+def copy_rx(con_in, con_out):
+    rx_df = pd.read_sql('select * from rx', con_in)
+
+    con_out.cursor().execute('DROP TABLE IF EXISTS rx;')
+
+    # packet rx table
+    con_out.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS rx (
+          t_nsec INTEGER NOT NULL,
+          tag TEXT NOT NULL,
+          src_node INTEGER NOT NULL,
+          src_app INTEGER NOT NULL,
+          dst_node INTEGER NOT NULL,
+          seq INTEGER NOT NULL,
+          size INTEGER NOT NULL,
+          delay INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, src_node, src_app, dst_node, seq)
+        );"""
+    )
+
+    for t in rx_df.itertuples():
+        con_out.execute(
+                f'INSERT INTO rx (t_nsec, tag, src_node, src_app, dst_node, seq, size, delay) ' \
+                f'VALUES ({t.t_nsec}, "{t.tag}", {t.src_node}, {t.src_app}, {t.dst_node}, {t.seq}, {t.size}, {t.delay});'
+            )
+
+    con_out.commit()
+
+
+def copy_tx(con_in, con_out):
+    tx_df = pd.read_sql('select * from tx', con_in)
+
+    con_out.cursor().execute('DROP TABLE IF EXISTS tx;')
+
+    # packet tx table
+    con_out.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS tx (
+          t_nsec INTEGER NOT NULL,
+          tag TEXT NOT NULL,
+          src_node INTEGER NOT NULL,
+          src_app INTEGER NOT NULL,
+          seq INTEGER NOT NULL,
+          size INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, src_node, src_app, seq)
+        );"""
+    )
+
+    for t in tx_df.itertuples():
+        con_out.execute(
+                f'INSERT INTO tx (t_nsec, tag, src_node, src_app, seq, size) ' \
+                f'VALUES ({t.t_nsec}, "{t.tag}", {t.src_node}, {t.src_app}, {t.seq}, {t.size});'
+            )
+
+    con_out.commit()
+
+
+def aggregate_positions(con_in):
+    """
+    Take all of the reported waypoint positions and copy them forward
+    to each timepoint in the routing table where they are in effect
+    so that we can find the last waypoint that governs each node
+    by finding the timepoint associated with the routing time in
+    calc_positions.
+    """
+    pos_df = pd.read_sql('select * from positions', con_in)
+    pos_df['t'] = pos_df.t_nsec / 1000000000
+
+    print(pos_df.dtypes)
+
+    print(pos_df.head())
+
+    state = {}
+    positions = defaultdict(lambda: {})
+
+    last_t = -1
+    for r in pos_df.iloc:
+        print(r)
+        if not r.t == last_t:
+            if last_t >= 0:
+                positions[last_t] = copy.copy(state)
+
+            last_t = r.t
+        state[int(r.node)] = (int(r.node), r.t, r.x, r.y, r.z, r.vx, r.vy, r.vz)
+
+    if last_t >= 0 and state:
+        positions[last_t] = copy.copy(state)
+
+    min_p = (pos_df.x.min(), pos_df.y.min(), pos_df.z.min())
+    max_p = (pos_df.x.max(), pos_df.y.max(), pos_df.z.max())
+
+    return min_p,max_p,positions
+
+
+def calc_positions_and_neighbors(con_in, con_out, timepoints_df, link_distance):
+    min_p,max_p,positions = aggregate_positions(con_in)
+
+    # we want to store the calculate positions for every node for every time t_nsec
+    # in the active table
+    #
+    # The positions table only marks times where a node trajectory changes. The node
+    # position between these points is calculated from the interpolation from the
+    # most recent point based on position and velocity
+
+    # positions table
+    con_out.cursor().execute('DROP TABLE IF EXISTS positions;')
+    con_out.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS positions (
+          t_nsec INTEGER NOT NULL,
+          node INTEGER NOT NULL,
+          x REAL NOT NULL,
+          y REAL NOT NULL,
+          z REAL NOT NULL,
+          PRIMARY KEY(t_nsec, node)
+        );"""
+    )
+
+    # neibors tables
+    con_out.cursor().execute('DROP TABLE IF EXISTS neighbors;')
+    con_out.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS neighbors (
+          t_nsec INTEGER NOT NULL,
+          node INTEGER NOT NULL,
+          neighbors TEXT NOT NULL,
+          PRIMARY KEY(t_nsec, node)
+        );"""
+    )
+
+    for t_nsec in sorted(timepoints_df.t_nsec):
+        t_scenario = t_nsec / 1000000000
+
+        pos_t = []
+        neighbors = defaultdict(lambda: [])
+
+        # step backward through (decreasing) position timepoints until
+        # we find the position waypoint the first waypoint time that
+        # applies to the scenario time - the first one that is less
+        # than equal to the scenario time and find the interpolated time
+        for t,node_positions in sorted(positions.items(), reverse=True):
+            if t <= t_scenario:
+                for n,node_position in sorted(node_positions.items()):
+                    _,t_change,x,y,z,vx,vy,vz = node_position
+                    t_delta = t_scenario-t_change
+                    pos = (x+(vx*t_delta), y+(vy*t_delta), z+(vz*t_delta))
+                    pos_t.append((n, pos))
+
+                    con_out.execute(
+                        f'INSERT INTO positions (t_nsec, node, x, y, z) ' \
+                        f'VALUES ({t_nsec}, {n}, {pos[0]}, {pos[1]}, {pos[2]});'
+                    )
+
+                for (n1,p1),(n2,p2) in combinations(pos_t, 2):
+                    if distance(p1,p2) <= link_distance:
+                        neighbors[n1].append(n2)
+                        neighbors[n2].append(n1)
+
+                for n,nbrs in sorted(neighbors.items()):
+                    nbr_str = ",".join(map(str,nbrs))
+
+                    con_out.execute(
+                        f'INSERT INTO neighbors (t_nsec, node, neighbors) ' \
+                        f'VALUES ({t_nsec}, {n}, "{nbr_str}");'
+                    )
+
+                break
+
+    con_out.commit()
+
+
+def distance(p1, p2):
+    return math.sqrt(
+        (p1[0]-p2[0])**2 +
+        (p1[1]-p2[1])**2 +
+        (p1[2]-p2[2])**2)
+
+
+def mark_broken_routes(con_in, con_out, hopcount_limit, timepoints_df):
+    con_out.cursor().execute(
+        """
+        CREATE TABLE IF NOT EXISTS routes (
+          t_nsec INTEGER NOT NULL,
+          tag TEXT NOT NULL,
+          src_node INTEGER NOT NULL,
+          dst_node INTEGER NOT NULL,
+          active INTEGER NOT NULL,
+          route TEXT NOT NULL,
+          category TEXT NOT NULL,
+          hopcount INTEGER NOT NULL,
+          PRIMARY KEY(t_nsec, tag, src_node, dst_node)
+        );"""
+    )
+
+    tags = set()
+
+    for t_nsec in timepoints_df.t_nsec:
+        print(f'\rmark_broken_routes: {t_nsec}', end='')
+
+        neighbors_t_df = pd.read_sql(f'select * from neighbors where t_nsec=={t_nsec}', con_out)
+
+        neighbors_t = defaultdict(lambda: [])
+
+        for r in neighbors_t_df.iloc:
+            neighbors_t[int(r.node)] = tuple(map(int, r.neighbors.split(',')))
+
+        routes_df = pd.read_sql(f'select * from routes where t_nsec=={t_nsec}', con_in)
+
+        tags.update(routes_df.tag.unique())
+
+        for r in routes_df.iloc:
+            if not r.route.strip():
+                # no route case
+                con_out.execute(
+                    f'INSERT INTO routes (t_nsec, tag, src_node, dst_node, active, route, category, hopcount) ' \
+                    f'VALUES ({r.t_nsec}, "{r.tag}", {r.src_node}, {r.dst_node}, {r.active}, "{r.route}", "{r.category}", {r.hopcount});'
+                )
+                continue
+
+            category = r.category
+            route = r.route
+            path = list(map(int, r.route.split('-')))
+            hops = [r.src_node] + path
+            pairs = zip(hops[:-1],hops[1:])
+            route_to_break = []
+
+            broken = False
+            for n1,n2 in pairs:
+                if n2 in neighbors_t[n1]:
+                    route_to_break.append(n2)
+                else:
+                    broken = True
+                    break
+
+            # for a route with a broken link only include the partial route
+            # up to the last connected node
+            if broken:
+                category = 'broken'
+                if len(route_to_break) >= 1:
+                    route = '-'.join(map(str, route_to_break))
+                else:
+                    route = ''
+
+            hopcount = min(r.hopcount, hopcount_limit) if category == 'valid' else 0
+
+            con_out.execute(
+                f'INSERT INTO routes (t_nsec, tag, src_node, dst_node, active, route, category, hopcount) ' \
+                f'VALUES ({r.t_nsec}, "{r.tag}", {r.src_node}, {r.dst_node}, {r.active}, "{route}", "{category}", {hopcount});'
+            )
+
+    con_out.commit()
+
+    return tags
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser(description='Convert trace log into multiple txt files, usually mrcXXX.sqlite to rexp-raw.sqlite')
+
+    parser.add_argument('--link-distance',
+                        metavar='LINK_DISTANCE',
+                        default=DEFAULT_MAX_EDGE_DISTANCE,
+                        type=float,
+                        help='The distance in meters at or above which a link is considered to be broken, default is 139.0')
+    parser.add_argument('--hopcount-limit',
+                        metavar='HOPCOUNT',
+                        type=int,
+                        default=RouteCategories.VALID10.value,
+                        choices=range(1, RouteCategories.VALID10.value+1),
+                        help='Limit hopcounts greater than or equal to this value.')
+    parser.add_argument('insqlite',
+                        metavar='INSQLITE',
+                        help='The input sqlite file')
+    parser.add_argument('outsqlite',
+                        metavar='OUTSQLITE',
+                        help='The output sqlite file')
+
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.insqlite):
+        print(f'Bad inputfile "{args.insqlite}", quitting', file=sys.stderr)
+        exit(1)
+
+    #if os.path.exists(args.outsqlite):
+    #    print(f'Outputfile "{args.outsqlite}" already exists, quitting', file=sys.stderr)
+    #    exit(1)
+
+    con_in = sqlite3.connect(args.insqlite)
+
+    con_out = sqlite3.connect(args.outsqlite)
+
+    timepoints_df = copy_timepoints(con_in, con_out)
+
+    copy_tags(con_in, con_out)
+
+    copy_flows(con_in, con_out)
+
+    copy_rx(con_in, con_out)
+
+    copy_tx(con_in, con_out)
+
+    # create positions and neighbors tables based on link_distance.
+    calc_positions_and_neighbors(con_in, con_out, timepoints_df, args.link_distance)
+
+    # copy routes table from input to output file but overwriting category field
+    # as "broken" when a pair of nodes along the route path are not neighbors
+    tags = mark_broken_routes(con_in, con_out, args.hopcount_limit, timepoints_df)
+
+    save_params(con_out, args, tags)

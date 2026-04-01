@@ -1,0 +1,41 @@
+#!/usr/bin/python3
+
+import argparse
+
+import pandas as pd
+import sqlite3
+import matplotlib.pyplot as plt
+
+
+parser = argparse.ArgumentParser(description='Convert trace log into multiple txt files, usually mrcXXX.sqlite to rexp-raw.sqlite')
+
+parser.add_argument('insqlite',
+                    metavar='INSQLITE',
+                    help='The input sqlite file')
+parser.add_argument('outpng',
+                    metavar='OUTPNG',
+                    help='The output png file')
+
+args = parser.parse_args()
+
+plt.style.use('ggplot')
+
+con = sqlite3.connect(args.insqlite)
+
+rx_df = pd.read_sql('select * from rx', con)
+
+rx_df['t_sec'] = rx_df.t_nsec // 1000000000
+
+rx_bytes = rx_df.groupby(['t_sec', 'tag']).sum()['size']
+
+rx_windowed = rx_bytes.rolling(window=5, center=True).sum()
+
+rx_windowed = rx_windowed.dropna()
+
+fig = plt.figure()
+
+ax = fig.add_subplot()
+
+rx_windowed.unstack('tag').plot(ax=ax)
+
+fig.savefig(args.outpng)

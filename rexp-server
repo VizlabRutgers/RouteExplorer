@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+import argparse
+import logging
+from flask import Flask,render_template,send_from_directory,jsonify
+from jinja2 import Environment,FileSystemLoader
+
+from routeexplore.metricreader import MetricReader
+from routeexplore.positionmanager import PositionManager
+from routeexplore.pathmanager import PathManager
+
+
+app = Flask(__name__)
+app.logger.setLevel(logging.DEBUG)
+
+environment = Environment(loader=FileSystemLoader('templates/'))
+
+metrics_m = None
+pos_m = None
+path_m = None
+
+
+@app.route("/")
+def index():
+    t_min,t_max = path_m.get_time_range()
+
+    tags = path_m.get_tags()
+    print(tags)
+    categories = path_m.get_categories()
+    print(categories)
+    return render_template('main.html',
+                           t=t_min,
+                           tags=tags,
+                           categories=categories)
+
+
+@app.route('/metrics')
+def metrics():
+    return jsonify({
+        'metrics': metrics_m.metric_totals,
+        'metrics_by_node': metrics_m.metric_totals_by_node,
+        'rx_packets': metrics_m.rx_packets,
+        'rx_packets_bounds': metrics_m.rx_packets_bounds,
+        'cc_change_times': pos_m.cc_change_times
+    })
+
+
+@app.route('/positions/<tag>/<int:t_scen>')
+def positions(tag, t_scen):
+    t_min,t_max = path_m.get_time_range()
+    print(f'{t_scen} {t_min} {t_max}')
+    if t_scen < t_min:
+        t_scen = t_min
+    elif t_scen > t_max:
+        t_scen = t_max
+
+    pos,node_order = pos_m.get_positions_by_cc_and_node_order(t_scen)
+    nodes = pos_m.get_nodes
+    min_p, max_p = pos_m.get_space_range
+    edges = pos_m.get_edges(t_scen)
+    t_nsec,paths,src_dst_category_active = path_m.get_paths(tag, t_scen)
+    tags = path_m.get_tags()
+    cc_counts = pos_m.cc_counts_by_time(t_scen)
+
+    return jsonify({
+        't': t_nsec/1000000000,
+        'min': min_p,
+        'max': max_p,
+        'nodes': nodes,
+        'positions': pos,
+        'edges': edges,
+        'paths': paths,
+        'src_dst_category_active':src_dst_category_active,
+        'node_order': node_order,
+        'tags': tags,
+        'cc_counts': cc_counts
+    })
+
+
+@app.route('/css/<filename>')
+def serve_css(filename):
+    try:
+        return send_from_directory('static/css', filename)
+    except FileNotFoundError:
+        abort(404)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Run routeexplorer server')
+    parser.add_argument('-p', '--port',
+                        type=int,
+                        default=8000,
+                        help='Listening port, default 8000')
+    parser.add_argument('tidysqlite',
+                        metavar='TIDYSQLITE',
+                        help='The tidy sqlite file')
+
+    args = parser.parse_args()
+
+    print('load')
+    metrics_m = MetricReader(args.tidysqlite)
+    pos_m = PositionManager(args.tidysqlite)
+    path_m = PathManager(args.tidysqlite)
+    print('done')
+
+    # set debug=False to avoid reloading and double load on start
+    app.run(port=args.port, debug=False)
